@@ -1,0 +1,65 @@
+name: build
+
+on:
+  push:
+    branches: [master, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [master, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cc65 python3 python3-numpy python3-pil python3-scipy zip unzip
+      - name: Check version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(cat VERSION)" = "$GITHUB_REF_NAME"
+      - name: Compile
+        run: make
+      - name: Check assets against the art
+        run: make test-assets
+      - name: Package
+        run: make dist
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: CX16-INPUT-TEST.ZIP
+          path: build/CX16-INPUT-TEST.ZIP
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-24.04
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v8
+        with:
+          name: CX16-INPUT-TEST.ZIP
+          path: build
+      - name: Verify package
+        run: |
+          test -f build/CX16-INPUT-TEST.ZIP
+          unzip -tq build/CX16-INPUT-TEST.ZIP
+      - name: Publish package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" build/CX16-INPUT-TEST.ZIP --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" build/CX16-INPUT-TEST.ZIP \
+              --verify-tag --title "Release $GITHUB_REF_NAME" --notes ""
+          fi
