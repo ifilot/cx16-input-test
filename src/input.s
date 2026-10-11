@@ -31,6 +31,8 @@ MOUSE_CONFIG    = $FF68
 MOUSE_GET       = $FF6B
 EXTAPI          = $FEAB
 EXTAPI_KBD_LEDS = 14
+ROM_BANK        = $01
+ROM_VERSION     = $FF80        ; version byte in ROM bank 0
 
 QUEUE_SIZE      = 32            ; power of two
 
@@ -127,9 +129,31 @@ empty:
 ;
 .proc _kbd_leds
     tax
+    ; kbd_leds was added in R48. R47's EXTAPI dispatch does not check
+    ; its index, so calling slot 14 there jumps into unrelated code.
+    ; Read bank 0 explicitly: cc65 normally runs with BASIC ROM bank 4.
+    php
+    sei
+    lda ROM_BANK
+    pha
+    stz ROM_BANK
+    lda ROM_VERSION
+    tay
+    pla
+    sta ROM_BANK
+    plp
+    tya
+    bpl version
+    eor #$FF                   ; prerelease versions are negated
+    inc a
+version:
+    cmp #48
+    bcc unsupported
     lda #EXTAPI_KBD_LEDS
     clc
     jmp EXTAPI
+unsupported:
+    rts
 .endproc
 
 ;

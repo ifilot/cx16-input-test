@@ -94,3 +94,5 @@ controller and quitting.
   confirmed on real hardware.
 * cc65 2.19's `waitvsync()` polls the pre-R39 RAM bank register and hangs on
   current ROMs. The program waits on the KERNAL jiffy clock instead.
+* Physical keyboard LED updates require ROM R48 or newer. On older ROMs,
+  the lock LEDs still toggle on screen; the unavailable KERNAL call is skipped.

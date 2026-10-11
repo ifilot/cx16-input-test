@@ -53,7 +53,7 @@ dist: all
 	@echo "Distribution: $(DIST)"
 
 test: test-assets
-	$(PYTHON) tests/test_emulator.py
+	EMU="$(EMU)" ROM="$(ROM)" $(PYTHON) tests/test_emulator.py
 
 # no emulator needed (used by CI)
 test-assets: all

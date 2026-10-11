@@ -7,6 +7,7 @@ clean KERNAL text screen back. Screenshots go to build/screenshots/.
 
 Run after `make`.
 """
+import os
 import re
 import sys
 import tempfile
@@ -20,8 +21,8 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from x16agent import X16Agent  # noqa: E402
 import vera_preview  # noqa: E402
 
-EMU = ROOT.parent / 'x16-emulator' / 'build' / 'x16emu'
-ROM = ROOT.parent / 'emulator' / 'rom.bin'
+EMU = Path(os.environ.get('EMU', ROOT.parent / 'x16-emulator' / 'build' / 'x16emu'))
+ROM = Path(os.environ.get('ROM', ROOT.parent / 'emulator' / 'rom.bin'))
 
 # keyboard labels (as in the region names) -> SDL key names the emulator understands
 SDL_KEYS = {'ESC': 'Escape', '4080': 'ScrollLock', 'RUN': 'Pause', 'DEL': 'Delete', 'GRAVE': '`',
@@ -244,9 +245,52 @@ def test_quit(t, kernal_vector, kernal_palette, shots):
     t.emu.screenshot(shots / 'after_quit.png')
 
 
+def test_led_api_versions(tmp, log):
+    """Run the compiled LED wrapper against old/new, release/prerelease ROMs.
+
+    Replace EXTAPI with a recording stub so this checks dispatch independently
+    of the ROM's implementation, including restoration of bank and IRQ state.
+    """
+    sym = dict((n, int(a, 16)) for a, n in
+               re.findall(r'al ([0-9A-Fa-f]+) \.(\S+)', (BUILD / 'X16INPUT.sym').read_text()))
+    entry = sym['_kbd_leds']
+    for version in (46, 47, -47, 48, -48, 49):
+        rom = bytearray(ROM.read_bytes())
+        rom[0x3F80] = version & 255
+        for bank in (0, 4):
+            rom[bank * 16384 + 0x3EAB:bank * 16384 + 0x3EAE] = bytes([0x4C, 0x10, 0x04])
+        path = Path(tmp) / 'led-test-rom.bin'
+        path.write_bytes(rom)
+        with X16Agent(EMU, path, fsroot=BUILD, stderr=log) as emu:
+            emu.request('load_prg', path=str(BUILD / 'X16INPUT.PRG'))
+            emu.write_memory(0x0400, bytes([0x20, entry & 255, entry >> 8, 0xEA]))
+            # Record EXTAPI's A, X, carry and number of calls, then return.
+            emu.write_memory(0x0410, bytes([0x8D, 0x20, 0x04, 0x8E, 0x21, 0x04,
+                                          0x08, 0x68, 0x8D, 0x22, 0x04,
+                                          0xEE, 0x23, 0x04, 0x60]))
+            emu.request('breakpoint', address=0x0403)
+            for bank in (0, 4):
+                for flags in (0x20, 0x24):
+                    emu.write_memory(0x0420, bytes(4))
+                    emu.request('set_registers', pc=0x0400, a=5, p=flags,
+                                sp=0x01FF, rom_bank=bank)
+                    result = emu.advance(200, unit='instructions')
+                    assert result['reason'] == 'breakpoint', (version, result)
+                    state = result['state']
+                    assert state['rom_bank'] == bank and state['sp'] == 0x01FF, state
+                    assert state['p'] & 4 == flags & 4, state
+                    a, x, p, calls = emu.read_memory(0x0420, 4)
+                    assert calls == (abs(version) >= 48), (version, calls)
+                    if calls:
+                        assert (a, x, p & 1) == (14, 5, 0), (a, x, p)
+
+
 def main():
     shots = BUILD / 'screenshots'
     shots.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='x16input-') as tmp, \
+            open(Path(tmp) / 'led-test.log', 'w') as log:
+        test_led_api_versions(tmp, log)
     with tempfile.TemporaryDirectory(prefix='x16input-') as tmp, \
             open(Path(tmp) / 'emulator.log', 'w') as log, \
             X16Agent(EMU, ROM, fsroot=BUILD, stderr=log) as emu:
